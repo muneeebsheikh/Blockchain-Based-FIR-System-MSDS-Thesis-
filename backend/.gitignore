@@ -1,0 +1,5 @@
+node_modules
+dist
+.env
+.prisma
+demo-backup-*.json

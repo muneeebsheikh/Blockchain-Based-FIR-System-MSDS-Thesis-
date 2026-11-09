@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CITIZEN
+  OFFICER
+  ADMIN
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+  firsCreated  Fir[]    @relation("FirCreatedBy")
+}
+
+model Fir {
+  id                   String    @id @default(uuid())
+  externalReference    String    @unique
+  title                String
+  description          String
+  locationText         String?
+  incidentAt           DateTime?
+  canonicalPayloadJson String
+  contentHash          String
+  chainTxHash          String?
+  chainBlockNumber     Int?
+  anchoredAt           DateTime?
+  /** Merkle batch root (0x hex) when this FIR was committed via anchorBatch. */
+  merkleRoot           String?
+  /** Sibling path JSON: { sibling, siblingOnLeft }[] */
+  merkleProof          Json?
+  batchId              String?
+  integrityStatus      String    @default("PENDING")
+  createdById          String
+  createdBy            User      @relation("FirCreatedBy", fields: [createdById], references: [id])
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  firId     String?
+  actorId   String?
+  details   Json?
+  createdAt DateTime @default(now())
+}
