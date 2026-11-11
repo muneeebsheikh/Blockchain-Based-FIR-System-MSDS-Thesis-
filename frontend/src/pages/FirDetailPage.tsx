@@ -142,11 +142,24 @@ export function FirDetailPage() {
             </p>
           </>
         )}
-        {!fir.merkleRoot && <p>Mode: <strong>single-hash</strong> (Phase I)</p>}
+        {!fir.merkleRoot && fir.chainBlockNumber != null && (
+          <p>
+            Mode: <strong>single-hash</strong> (Phase I)
+          </p>
+        )}
+        {!fir.merkleRoot && fir.chainBlockNumber == null && (
+          <p>
+            Mode: <strong>pending batch</strong> — waiting for the background worker to call{" "}
+            <code>anchorBatch</code>
+          </p>
+        )}
         <p>
           Tx: <span className="mono wrap">{fir.chainTxHash ?? "n/a"}</span>
         </p>
         <p>Block: {fir.chainBlockNumber ?? "n/a"}</p>
+        {fir.receiptSignature && (
+          <p className="muted mono wrap">Receipt signature: {fir.receiptSignature.slice(0, 20)}…</p>
+        )}
         <button type="button" onClick={onVerify} disabled={busy}>
           {busy ? "Checking…" : "Full verification (DB + chain)"}
         </button>
@@ -170,6 +183,9 @@ export function FirDetailPage() {
             )}
             {verify.verificationMode === "single_hash" && (
               <p>Single hash present on-chain: {String(verify.singleAnchoredOnChain)}</p>
+            )}
+            {verify.verificationMode === "pending" && (
+              <p>Still pending batch anchor — not marked TAMPERED solely for missing chain record.</p>
             )}
             <p className="mono wrap">Stored: {verify.storedContentHash}</p>
             <p className="mono wrap">Hash from canonical: {verify.recomputedContentHash}</p>

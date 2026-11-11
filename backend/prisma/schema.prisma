@@ -31,6 +31,8 @@ model Fir {
   incidentAt           DateTime?
   canonicalPayloadJson String
   contentHash          String
+  /** EIP-191 signature over FIR-RECEIPT|v1|ref|hash|registeredAtISO */
+  receiptSignature     String?
   chainTxHash          String?
   chainBlockNumber     Int?
   anchoredAt           DateTime?

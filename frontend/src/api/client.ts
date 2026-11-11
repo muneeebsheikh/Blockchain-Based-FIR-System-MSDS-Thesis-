@@ -43,6 +43,14 @@ export type CanonicalFirPayload = {
   incidentAt: string | null;
 };
 
+export type FirReceipt = {
+  version: "v1";
+  externalReference: string;
+  contentHash: string;
+  registeredAt: string;
+  signature: string;
+};
+
 export type FirRow = {
   id: string;
   externalReference: string;
@@ -52,6 +60,7 @@ export type FirRow = {
   incidentAt: string | null;
   canonicalPayloadJson: string;
   contentHash: string;
+  receiptSignature?: string | null;
   chainTxHash: string | null;
   chainBlockNumber: number | null;
   anchoredAt?: string | null;
@@ -65,6 +74,27 @@ export type FirRow = {
   createdAt: string;
   createdBy?: { id: string; email: string };
 };
+
+export function receiptFromFir(fir: FirRow): FirReceipt | null {
+  if (!fir.receiptSignature) return null;
+  return {
+    version: "v1",
+    externalReference: fir.externalReference,
+    contentHash: fir.contentHash,
+    registeredAt: fir.createdAt,
+    signature: fir.receiptSignature,
+  };
+}
+
+export function downloadReceipt(receipt: FirReceipt, filename?: string) {
+  const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename ?? `fir-receipt-${receipt.externalReference.slice(0, 8)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export async function listFirs() {
   const { data } = await http.get<{ items: FirRow[] }>("/api/firs");
@@ -88,7 +118,33 @@ export async function createFir(body: {
     contentHash: string;
     chainTxHash: string | null;
     chainBlockNumber: number | null;
+    status: string;
+    receipt: FirReceipt;
   }>("/api/firs", body);
+  return data;
+}
+
+export type ReceiptVerifyResult = {
+  signatureValid: boolean;
+  recoveredAddress: string | null;
+  signerMatchesSystem: boolean | null;
+  systemSignerAddress: string;
+  firFound: boolean;
+  hashMatchesCurrentRecord: boolean | null;
+  anchored: boolean | null;
+  anchoredHashMatchesReceipt: boolean | null;
+  fir: {
+    id: string;
+    title: string;
+    integrityStatus: string;
+    chainBlockNumber: number | null;
+    merkleRoot: string | null;
+    batchId: string | null;
+  } | null;
+};
+
+export async function verifyReceipt(receipt: FirReceipt) {
+  const { data } = await http.post<ReceiptVerifyResult>("/api/receipts/verify", receipt);
   return data;
 }
 
@@ -115,7 +171,7 @@ export async function verifyFir(id: string) {
     dbMatchesCanonical: boolean;
     rowMatchesCanonicalPayload: boolean;
     anchoredOnChain: boolean;
-    verificationMode: "merkle_batch" | "single_hash";
+    verificationMode: "merkle_batch" | "single_hash" | "pending";
     merkleProofValid: boolean | null;
     batchAnchoredOnChain: boolean | null;
     singleAnchoredOnChain: boolean | null;
