@@ -10,8 +10,12 @@ export function citizenStatus(f: FirRow): CitizenStatus {
       hint: "The stored record no longer matches the fingerprint recorded on the blockchain.",
     };
   }
-  if (f.chainBlockNumber == null) {
-    return { tone: "pending", label: "Pending", hint: "Not yet recorded on the blockchain." };
+  if (f.chainBlockNumber == null || f.integrityStatus === "PENDING" || f.effectiveIntegrity === "PENDING") {
+    return {
+      tone: "pending",
+      label: "Pending anchoring",
+      hint: "Registered with a signed receipt; waiting for the batch worker to anchor it on the blockchain.",
+    };
   }
   return {
     tone: "ok",

@@ -28,6 +28,7 @@ import {
   requireRoles,
   type AuthedRequest,
 } from "../middleware/authMiddleware.js";
+import { signFirReceipt } from "../lib/receipt.js";
 
 const createFirSchema = z.object({
   title: z.string().min(3).max(200),
@@ -72,6 +73,7 @@ function effectiveIntegrity(fir: Fir, signals: IntegritySignals): string {
     return "TAMPERED";
   }
   if (fir.integrityStatus === "TAMPERED") return "TAMPERED";
+  if (fir.integrityStatus === "PENDING" && fir.chainBlockNumber == null) return "PENDING";
   return "OK";
 }
 
@@ -103,24 +105,34 @@ export function createFirsRouter(env: Env) {
     };
     const contentHash = firContentHash(payload);
     const canonicalPayloadJson = canonicalizePayload(payload);
-
-    const { contract } = getChainClients({
-      rpcUrl: env.RPC_URL,
-      signerKey: env.SIGNER_PRIVATE_KEY as `0x${string}`,
-      contractAddress: env.FIR_CONTRACT_ADDRESS as `0x${string}`,
+    const registeredAt = new Date();
+    const firReceipt = await signFirReceipt(env.SIGNER_PRIVATE_KEY as `0x${string}`, {
+      externalReference,
+      contentHash,
+      registeredAt: registeredAt.toISOString(),
     });
 
     let chainTxHash: string | null = null;
     let chainBlockNumber: number | null = null;
     let anchoredAt: Date | null = null;
-    try {
-      const receipt = await anchorOnChain(contract, contentHash, externalReference);
-      chainTxHash = receipt.txHash;
-      chainBlockNumber = receipt.blockNumber;
-      anchoredAt = new Date();
-    } catch (e) {
-      console.error("Chain anchor failed", e);
-      return res.status(502).json({ error: "Blockchain anchor failed; FIR not stored" });
+    let integrityStatus = "PENDING";
+
+    if (env.ANCHOR_MODE === "single") {
+      const { contract } = getChainClients({
+        rpcUrl: env.RPC_URL,
+        signerKey: env.SIGNER_PRIVATE_KEY as `0x${string}`,
+        contractAddress: env.FIR_CONTRACT_ADDRESS as `0x${string}`,
+      });
+      try {
+        const chainReceipt = await anchorOnChain(contract, contentHash, externalReference);
+        chainTxHash = chainReceipt.txHash;
+        chainBlockNumber = chainReceipt.blockNumber;
+        anchoredAt = new Date();
+        integrityStatus = "OK";
+      } catch (e) {
+        console.error("Chain anchor failed", e);
+        return res.status(502).json({ error: "Blockchain anchor failed; FIR not stored" });
+      }
     }
 
     const fir = await prisma.fir.create({
@@ -132,20 +144,28 @@ export function createFirsRouter(env: Env) {
         incidentAt: payload.incidentAt ? new Date(payload.incidentAt) : null,
         canonicalPayloadJson,
         contentHash,
+        receiptSignature: firReceipt.signature,
         chainTxHash,
         chainBlockNumber,
         anchoredAt,
-        integrityStatus: "OK",
+        integrityStatus,
         createdById: userId,
+        createdAt: registeredAt,
       },
     });
 
     await prisma.auditLog.create({
       data: {
-        action: "FIR_CREATED_ANCHORED",
+        action: env.ANCHOR_MODE === "single" ? "FIR_CREATED_ANCHORED" : "FIR_CREATED_PENDING",
         firId: fir.id,
         actorId: userId,
-        details: { externalReference, contentHash, chainTxHash },
+        details: {
+          externalReference,
+          contentHash,
+          chainTxHash,
+          anchorMode: env.ANCHOR_MODE,
+          receiptSignature: firReceipt.signature,
+        },
       },
     });
 
@@ -155,6 +175,8 @@ export function createFirsRouter(env: Env) {
       contentHash: fir.contentHash,
       chainTxHash: fir.chainTxHash,
       chainBlockNumber: fir.chainBlockNumber,
+      status: integrityStatus,
+      receipt: firReceipt,
     });
   });
 
@@ -423,19 +445,65 @@ export function createFirsRouter(env: Env) {
       canonicalizePayload(rowPayload) === fir.canonicalPayloadJson;
     const recomputedRowHash = firContentHash(rowPayload);
 
-    const { contract } = getChainClients({
-      rpcUrl: env.RPC_URL,
-      signerKey: env.SIGNER_PRIVATE_KEY as `0x${string}`,
-      contractAddress: env.FIR_CONTRACT_ADDRESS as `0x${string}`,
-    });
-
     const proof = parseMerkleProof(fir.merkleProof);
     const isBatch = Boolean(fir.merkleRoot && proof);
+    const isPending = fir.integrityStatus === "PENDING" && fir.chainBlockNumber == null;
 
     let merkleProofValid: boolean | null = null;
     let batchAnchoredOnChain: boolean | null = null;
     let singleAnchoredOnChain: boolean | null = null;
     let anchoredOnChain = false;
+
+    if (isPending) {
+      // Still waiting for the batch worker — do not mark TAMPERED solely for missing chain.
+      const integrityStatus =
+        canonicalBlobMatchesStoredHash && rowMatchesCanonicalPayload ? "PENDING" : "TAMPERED";
+      if (integrityStatus === "TAMPERED") {
+        await prisma.fir.update({
+          where: { id: String(fir.id) },
+          data: { integrityStatus },
+        });
+      }
+      await prisma.auditLog.create({
+        data: {
+          action: "FIR_VERIFY",
+          firId: fir.id,
+          actorId,
+          details: {
+            canonicalBlobMatchesStoredHash,
+            rowMatchesCanonicalPayload,
+            onChain: false,
+            pending: true,
+            recomputed,
+            recomputedRowHash,
+            storedHash: fir.contentHash,
+          },
+        },
+      });
+      return {
+        integrityStatus,
+        dbMatchesCanonical: canonicalBlobMatchesStoredHash,
+        rowMatchesCanonicalPayload,
+        anchoredOnChain: false,
+        verificationMode: "pending" as const,
+        merkleProofValid: null,
+        batchAnchoredOnChain: null,
+        singleAnchoredOnChain: null,
+        merkleRoot: fir.merkleRoot,
+        batchId: fir.batchId,
+        proofLength: proof?.length ?? null,
+        leafHash: recomputed,
+        storedContentHash: fir.contentHash,
+        recomputedContentHash: recomputed,
+        recomputedFromRowHash: recomputedRowHash,
+      };
+    }
+
+    const { contract } = getChainClients({
+      rpcUrl: env.RPC_URL,
+      signerKey: env.SIGNER_PRIVATE_KEY as `0x${string}`,
+      contractAddress: env.FIR_CONTRACT_ADDRESS as `0x${string}`,
+    });
 
     if (isBatch && fir.merkleRoot && proof) {
       merkleProofValid = verifyMerkleProof(recomputed, proof, fir.merkleRoot);
@@ -483,7 +551,7 @@ export function createFirsRouter(env: Env) {
       dbMatchesCanonical: canonicalBlobMatchesStoredHash,
       rowMatchesCanonicalPayload,
       anchoredOnChain,
-      verificationMode: isBatch ? "merkle_batch" : "single_hash",
+      verificationMode: isBatch ? ("merkle_batch" as const) : ("single_hash" as const),
       merkleProofValid,
       batchAnchoredOnChain,
       singleAnchoredOnChain,

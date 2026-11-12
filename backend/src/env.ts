@@ -11,6 +11,12 @@ const schema = z.object({
   CHAIN_ID: z.coerce.number().optional(),
   FIR_CONTRACT_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
   SIGNER_PRIVATE_KEY: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+  /** `batch` = save PENDING then worker anchors; `single` = anchor before save (Phase I). */
+  ANCHOR_MODE: z.enum(["batch", "single"]).default("batch"),
+  /** Flush pending FIRs when the oldest is at least this many seconds old. */
+  BATCH_INTERVAL_SECONDS: z.coerce.number().int().positive().default(30),
+  /** Flush immediately when this many FIRs are pending (max 64). */
+  BATCH_MAX_SIZE: z.coerce.number().int().min(1).max(64).default(64),
 });
 
 export type Env = z.infer<typeof schema>;

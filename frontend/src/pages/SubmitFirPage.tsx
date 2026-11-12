@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { createFir } from "../api/client";
+import { createFir, downloadReceipt } from "../api/client";
 
 export function SubmitFirPage() {
   const [title, setTitle] = useState("");
@@ -29,10 +29,15 @@ export function SubmitFirPage() {
     }
   }
 
+  const pending = result?.status === "PENDING";
+
   return (
     <main className="panel wide">
       <h1>Submit FIR (citizen)</h1>
-      <p className="muted">Full narrative stays in PostgreSQL; a SHA-256 digest is anchored on-chain.</p>
+      <p className="muted">
+        Full narrative stays in PostgreSQL. A SHA-256 fingerprint is signed as a receipt immediately; the batch
+        worker anchors it on the blockchain shortly after.
+      </p>
       <form onSubmit={onSubmit} className="stack">
         <label className="field">
           <span>Title</span>
@@ -53,15 +58,27 @@ export function SubmitFirPage() {
         {error && <p className="error">{error}</p>}
         {result && (
           <div className="card success-card">
-            <p className="success">
-              <strong>✓ FIR submitted and secured on the blockchain</strong>
-              {result.chainBlockNumber != null ? ` (block #${result.chainBlockNumber})` : ""}.
-            </p>
+            {pending ? (
+              <p className="success">
+                <strong>✓ FIR registered. Pending blockchain anchoring.</strong> A batch worker will commit it
+                under a Merkle root within about 30 seconds.
+              </p>
+            ) : (
+              <p className="success">
+                <strong>✓ FIR submitted and secured on the blockchain</strong>
+                {result.chainBlockNumber != null ? ` (block #${result.chainBlockNumber})` : ""}.
+              </p>
+            )}
             <p className="muted mono wrap">Fingerprint: {result.contentHash}</p>
-            <Link to={`/my-firs/${result.id}`}>View your FIR and its integrity status →</Link>
+            <div className="citizen-actions">
+              <button type="button" onClick={() => downloadReceipt(result.receipt)}>
+                Download receipt
+              </button>
+              <Link to={`/my-firs/${result.id}`}>View your FIR and its integrity status →</Link>
+            </div>
           </div>
         )}
-        <button type="submit">Submit and anchor</button>
+        <button type="submit">{pending ? "Submit another FIR" : "Submit FIR"}</button>
       </form>
     </main>
   );

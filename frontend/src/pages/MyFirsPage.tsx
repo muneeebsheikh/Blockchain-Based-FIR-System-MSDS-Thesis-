@@ -1,29 +1,39 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listMyFirs, type FirRow } from "../api/client";
 import { anchoredPayload, citizenStatus, shortHash } from "./citizenStatus";
+
+const REFRESH_MS = 5000;
 
 export function MyFirsPage() {
   const [items, setItems] = useState<FirRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const rows = await listMyFirs();
-        if (!cancelled) setItems(rows);
-      } catch {
-        if (!cancelled) setError("Could not load your FIRs. Ensure the API is running.");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const load = useCallback(async () => {
+    try {
+      const rows = await listMyFirs();
+      setItems(rows);
+      setError(null);
+    } catch {
+      setError("Could not load your FIRs. Ensure the API is running.");
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const hasPending = Boolean(items?.some((f) => citizenStatus(f).tone === "pending"));
+
+  useEffect(() => {
+    if (!hasPending) return;
+    const t = setInterval(() => void load(), REFRESH_MS);
+    return () => clearInterval(t);
+  }, [hasPending, load]);
 
   const secured = items?.filter((f) => citizenStatus(f).tone === "ok").length ?? 0;
   const alerts = items?.filter((f) => citizenStatus(f).tone === "bad").length ?? 0;
+  const pending = items?.filter((f) => citizenStatus(f).tone === "pending").length ?? 0;
 
   return (
     <main className="panel citizen-page">
@@ -33,6 +43,7 @@ export function MyFirsPage() {
           <p className="muted">
             Every FIR you submit is fingerprinted and recorded on the blockchain. Open one to check that it has not
             been changed.
+            {hasPending ? " Waiting for the batch worker to anchor pending FIRs…" : ""}
           </p>
         </div>
         <Link to="/submit" className="citizen-cta">
@@ -51,6 +62,10 @@ export function MyFirsPage() {
           <div className="citizen-summary-item ok">
             <strong>{secured}</strong>
             <span className="muted">secured</span>
+          </div>
+          <div className={`citizen-summary-item ${pending > 0 ? "pending" : ""}`}>
+            <strong>{pending}</strong>
+            <span className="muted">pending</span>
           </div>
           <div className={`citizen-summary-item ${alerts > 0 ? "bad" : ""}`}>
             <strong>{alerts}</strong>
@@ -94,12 +109,12 @@ export function MyFirsPage() {
                         <div className="muted">{f.merkleRoot ? "Batch (Merkle)" : "Individual"}</div>
                       </>
                     ) : (
-                      <span className="muted">n/a</span>
+                      <span className="muted">Awaiting batch…</span>
                     )}
                   </td>
                   <td>
                     <span className={`status-badge ${s.tone}`} title={s.hint}>
-                      {s.tone === "ok" ? "✓ " : s.tone === "bad" ? "✗ " : ""}
+                      {s.tone === "ok" ? "✓ " : s.tone === "bad" ? "✗ " : "… "}
                       {s.label}
                     </span>
                   </td>

@@ -8,6 +8,7 @@ import { FirDetailPage } from "./pages/FirDetailPage";
 import { ChainPage } from "./pages/ChainPage";
 import { MyFirsPage } from "./pages/MyFirsPage";
 import { MyFirDetailPage } from "./pages/MyFirDetailPage";
+import { VerifyReceiptPage } from "./pages/VerifyReceiptPage";
 import { useAuth } from "./auth/AuthContext";
 import { RequireAuth } from "./routes/RequireAuth";
 
@@ -23,18 +24,21 @@ export default function App() {
             <>
               <Link to="/login">Sign in</Link>
               <Link to="/register">Register</Link>
+              <Link to="/verify-receipt">Verify receipt</Link>
             </>
           )}
           {user?.role === "CITIZEN" && (
             <>
               <Link to="/submit">Submit FIR</Link>
               <Link to="/my-firs">My FIRs</Link>
+              <Link to="/verify-receipt">Verify receipt</Link>
             </>
           )}
           {(user?.role === "OFFICER" || user?.role === "ADMIN") && (
             <>
               <Link to="/queue">Queue</Link>
               <Link to="/chain">Chain</Link>
+              <Link to="/verify-receipt">Verify receipt</Link>
             </>
           )}
           {user && (
@@ -49,6 +53,7 @@ export default function App() {
         <Route path="/" element={<HomeRedirect />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/verify-receipt" element={<VerifyReceiptPage />} />
         <Route
           path="/submit"
           element={

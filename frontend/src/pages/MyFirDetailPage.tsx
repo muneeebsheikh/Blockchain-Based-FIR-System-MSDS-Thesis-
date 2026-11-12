@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getMyFir, verifyMyFir, type FirRow, type VerifyResult } from "../api/client";
+import {
+  downloadReceipt,
+  getMyFir,
+  receiptFromFir,
+  verifyMyFir,
+  type FirRow,
+  type VerifyResult,
+} from "../api/client";
 import { anchoredPayload, citizenStatus, shortHash } from "./citizenStatus";
+
+const REFRESH_MS = 5000;
 
 export function MyFirDetailPage() {
   const { id } = useParams();
@@ -42,6 +51,24 @@ export function MyFirDetailPage() {
     };
   }, [id, runCheck]);
 
+  const isPending = fir ? citizenStatus(fir).tone === "pending" : false;
+
+  useEffect(() => {
+    if (!isPending || !id) return;
+    const t = setInterval(async () => {
+      try {
+        const row = await getMyFir(id);
+        setFir(row);
+        if (citizenStatus(row).tone !== "pending") {
+          setCheck(await verifyMyFir(id));
+        }
+      } catch {
+        /* ignore transient refresh errors */
+      }
+    }, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [isPending, id]);
+
   if (!fir) {
     return (
       <main className="panel citizen-page">
@@ -55,6 +82,7 @@ export function MyFirDetailPage() {
   const status = citizenStatus(fir);
   const textUnchanged = check ? check.dbMatchesCanonical && check.rowMatchesCanonicalPayload : null;
   const drift = !fir.integritySignals.rowMatchesCanonicalPayload;
+  const receipt = receiptFromFir(fir);
 
   return (
     <main className="panel citizen-page">
@@ -109,35 +137,56 @@ export function MyFirDetailPage() {
 
         <section className="card stack">
           <h2>Blockchain record</h2>
-          <dl className="citizen-dl">
-            <dt>Recorded</dt>
-            <dd>
-              {fir.chainBlockNumber != null ? `Block #${fir.chainBlockNumber}` : "n/a"}
-              {fir.anchoredAt ? ` · ${new Date(fir.anchoredAt).toLocaleString()}` : ""}
-            </dd>
-            <dt>Method</dt>
-            <dd>{fir.merkleRoot ? "Batch (Merkle tree)" : "Individual fingerprint"}</dd>
-            <dt>Fingerprint</dt>
-            <dd className="mono wrap" title={fir.contentHash}>
-              {fir.contentHash}
-            </dd>
-            {fir.merkleRoot && (
-              <>
-                <dt>Batch root</dt>
-                <dd className="mono wrap">{fir.merkleRoot}</dd>
-              </>
-            )}
-            <dt>Transaction</dt>
-            <dd className="mono" title={fir.chainTxHash ?? ""}>
-              {shortHash(fir.chainTxHash)}
-            </dd>
-          </dl>
+          {status.tone === "pending" ? (
+            <p className="muted">
+              Your FIR is registered and you have a signed receipt. The batch worker will anchor it on the
+              blockchain shortly (usually within 30 seconds). This page refreshes automatically.
+            </p>
+          ) : (
+            <dl className="citizen-dl">
+              <dt>Recorded</dt>
+              <dd>
+                {fir.chainBlockNumber != null ? `Block #${fir.chainBlockNumber}` : "n/a"}
+                {fir.anchoredAt ? ` · ${new Date(fir.anchoredAt).toLocaleString()}` : ""}
+              </dd>
+              <dt>Method</dt>
+              <dd>{fir.merkleRoot ? "Batch (Merkle tree)" : "Individual fingerprint"}</dd>
+              <dt>Fingerprint</dt>
+              <dd className="mono wrap" title={fir.contentHash}>
+                {fir.contentHash}
+              </dd>
+              {fir.merkleRoot && (
+                <>
+                  <dt>Batch root</dt>
+                  <dd className="mono wrap">{fir.merkleRoot}</dd>
+                </>
+              )}
+              <dt>Transaction</dt>
+              <dd className="mono" title={fir.chainTxHash ?? ""}>
+                {shortHash(fir.chainTxHash)}
+              </dd>
+            </dl>
+          )}
           <p className="muted citizen-explain">
             The fingerprint is a SHA-256 hash of your FIR. Any change to the text, even one letter, produces a
             completely different fingerprint, so changes can always be detected.
           </p>
         </section>
       </div>
+
+      {receipt && (
+        <section className="card stack">
+          <h2>Signed receipt</h2>
+          <p className="muted">
+            Download this receipt and keep it. Anyone can verify it at{" "}
+            <Link to="/verify-receipt">Verify receipt</Link> without signing in. It proves what was registered and
+            when, even before the blockchain batch lands.
+          </p>
+          <button type="button" onClick={() => downloadReceipt(receipt)}>
+            Download receipt (JSON)
+          </button>
+        </section>
+      )}
 
       <section className="card stack">
         <div className="citizen-check-head">
@@ -151,19 +200,36 @@ export function MyFirDetailPage() {
         {check && (
           <>
             <ul className="check-list">
-              <CheckItem ok={textUnchanged} label="Your FIR text is unchanged since you submitted it" />
+              <CheckItem
+                tone={textUnchanged ? "ok" : "bad"}
+                label="Your FIR text is unchanged since you submitted it"
+              />
+              {check.verificationMode === "pending" && (
+                <CheckItem tone="pending" label="Waiting for the batch worker to anchor this FIR on the blockchain" />
+              )}
               {check.verificationMode === "merkle_batch" && (
                 <CheckItem
-                  ok={check.merkleProofValid}
+                  tone={check.merkleProofValid ? "ok" : "bad"}
                   label="Your FIR's proof links it to the batch recorded on the blockchain"
                 />
               )}
-              <CheckItem ok={check.anchoredOnChain} label="The fingerprint is recorded on the blockchain" />
+              {check.verificationMode !== "pending" && (
+                <CheckItem
+                  tone={check.anchoredOnChain ? "ok" : "bad"}
+                  label="The fingerprint is recorded on the blockchain"
+                />
+              )}
             </ul>
-            <p className={`citizen-verdict ${check.integrityStatus === "OK" ? "ok" : "bad"}`}>
+            <p
+              className={`citizen-verdict ${
+                check.integrityStatus === "OK" ? "ok" : check.integrityStatus === "PENDING" ? "pending" : "bad"
+              }`}
+            >
               {check.integrityStatus === "OK"
                 ? "Verified: your FIR is authentic and has not been altered."
-                : "Warning: your FIR record has been altered after registration. Please contact the police station or keep this page as evidence."}
+                : check.integrityStatus === "PENDING"
+                  ? "Registered and receipted. Blockchain anchoring is still pending — this page will update automatically."
+                  : "Warning: your FIR record has been altered after registration. Please contact the police station or keep this page as evidence."}
             </p>
           </>
         )}
@@ -172,10 +238,10 @@ export function MyFirDetailPage() {
   );
 }
 
-function CheckItem({ ok, label }: { ok: boolean | null; label: string }) {
+function CheckItem({ tone, label }: { tone: "ok" | "bad" | "pending"; label: string }) {
   return (
-    <li className={ok ? "ok" : "bad"}>
-      <span className="check-icon">{ok ? "✓" : "✗"}</span>
+    <li className={tone}>
+      <span className="check-icon">{tone === "ok" ? "✓" : tone === "bad" ? "✗" : "…"}</span>
       {label}
     </li>
   );
